@@ -4,40 +4,50 @@ import json
 import struct
 from pathlib import Path
 import hashlib
+import os
+import tempfile
 
 HOST = "127.0.0.1"
 PORT = 5000
-MAX_FILE_SIZE = 10 * 1024 * 1024
+MAX_FILE_SIZE = 100 * 1024 * 1024
+MAX_JSON_SIZE = 64 * 1024
 UPLOAD_DIR = Path("results/uploads")
 
 
 # Nhan chinh xac n byte
-def recv_exact(conn, n):
+
+def recv_exact(conn, n, allow_eof=False):
     data = b""
 
     while len(data) < n:
         chunk = conn.recv(n - len(data))
 
         if not chunk:
-            raise ConnectionError("Mat ket noi")
+            if allow_eof and not data:
+                raise EOFError("Client da dong ket noi")
+
+            raise ConnectionError("Mat ket noi khi dang nhan du lieu")
 
         data += chunk
 
     return data
 
 
+
 # Nhan mot thong diep JSON
-def recv_json(conn):
-    header = recv_exact(conn, 4)
+
+def recv_json(conn, allow_eof=False):
+    header = recv_exact(conn, 4, allow_eof=allow_eof)
 
     size = struct.unpack("!I", header)[0]
 
-    if size < 1 or size > 4096:
+    if size < 1 or size > MAX_JSON_SIZE:
         raise ValueError("Kich thuoc JSON khong hop le")
 
     data = recv_exact(conn, size)
 
     return json.loads(data.decode("utf-8"))
+
 
 
 # Gui thong diep JSON
@@ -86,97 +96,227 @@ def handle_upload(conn, request):
         })
         return
 
+    
+    # Tao thu muc luu file
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Thu muc rieng cho file tam
+    temp_dir = UPLOAD_DIR / ".tmp"
+    temp_dir.mkdir(exist_ok=True)
+
     file_path = UPLOAD_DIR / filename
 
-    # Tao bo tinh SHA-256
-    hasher = hashlib.sha256()
-    remaining = file_size
-
-    try:
-        # xb: tao file moi, khong ghi de file cu
-        with open(file_path, "xb") as f:
-
-            send_json(conn, {"status": "READY"})
-
-            while remaining > 0:
-                data = conn.recv(min(4096, remaining))
-
-                if not data:
-                    raise ConnectionError("Mat ket noi")
-
-                # Ghi du lieu vao file
-                f.write(data)
-
-                # Cap nhat SHA-256
-                hasher.update(data)
-
-                remaining -= len(data)
-
-    except FileExistsError:
+    # Khong cho ghi de file da ton tai
+    if file_path.exists():
         send_json(conn, {
             "status": "ERROR",
             "message": "File da ton tai"
         })
         return
 
-    except Exception:
-        file_path.unlink(missing_ok=True)
-        raise
+    temp_path = None
 
-    # Lay gia tri bam cua file da nhan
-    actual_hash = hasher.hexdigest()
+    try:
+        # Tao file tam co ten duy nhat
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=temp_dir,
+            prefix="upload_",
+            suffix=".part",
+            delete=False
+        ) as f:
 
-    # So sanh SHA-256
-    if actual_hash != expected_hash.lower():
+            temp_path = Path(f.name)
 
-        file_path.unlink(missing_ok=True)
+            # Bao Client bat dau gui du lieu
+            send_json(conn, {"status": "READY"})
+
+            hasher = hashlib.sha256()
+            remaining = file_size
+
+            # Nhan file theo chunk
+            while remaining > 0:
+                data = conn.recv(min(4096, remaining))
+
+                if not data:
+                    raise ConnectionError("Mat ket noi")
+
+                f.write(data)
+                hasher.update(data)
+                remaining -= len(data)
+
+        # So sanh SHA-256
+        actual_hash = hasher.hexdigest()
+
+        if actual_hash != expected_hash.lower():
+            send_json(conn, {
+                "status": "ERROR",
+                "message": "SHA-256 khong khop"
+            })
+            return
+
+        # Cong bo file ma khong ghi de file cu
+        try:
+            os.link(temp_path, file_path)
+        except FileExistsError:
+            send_json(conn, {
+                "status": "ERROR",
+                "message": "File da ton tai"
+            })
+            return
+
+        print("Nhan file thanh cong:", filename)
 
         send_json(conn, {
+            "status": "SUCCESS",
+            "size": file_size,
+            "sha256": actual_hash
+        })
+
+    finally:
+        # Luon don dep file tam
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+
+
+def handle_download(conn, request):
+    # Lay ten file Client muon tai
+    filename = request.get("filename")
+
+    # Kiem tra ten file hop le
+    if (
+        not isinstance(filename, str)
+        or not filename
+        or filename in (".", "..")
+        or "/" in filename
+        or "\\" in filename
+        or "\x00" in filename
+    ):
+        send_json(conn, {
             "status": "ERROR",
-            "message": "SHA-256 khong khop"
+            "message": "Ten file khong hop le"
         })
         return
 
-    print("Nhan file thanh cong:", filename)
+    # Xac dinh duong dan file
+    file_path = UPLOAD_DIR / filename
 
+    # Kiem tra file co ton tai khong
+    if not file_path.is_file():
+        send_json(conn, {
+            "status": "ERROR",
+            "message": "File khong ton tai"
+        })
+        return
+
+    # Lay kich thuoc file
+    file_size = file_path.stat().st_size
+
+    # Tinh SHA-256 cua file
+    hasher = hashlib.sha256()
+
+    with open(file_path, "rb") as f:
+        while True:
+            data = f.read(4096)
+
+            if not data:
+                break
+
+            hasher.update(data)
+
+    file_hash = hasher.hexdigest()
+
+    # Gui metadata ve Client
     send_json(conn, {
-        "status": "SUCCESS",
+        "status": "READY",
+        "filename": filename,
         "size": file_size,
-        "sha256": actual_hash
+        "sha256": file_hash
     })
+
+    # Cho Client xac nhan san sang nhan file
+    response = recv_json(conn)
+
+    if (
+        not isinstance(response, dict)
+        or response.get("status") != "READY"
+    ):
+        print("Client khong san sang nhan file")
+        return
+
+    # Gui noi dung file theo chunk
+    remaining = file_size
+
+    with open(file_path, "rb") as f:
+        while remaining > 0:
+            data = f.read(min(4096, remaining))
+
+            if not data:
+                raise OSError("File thay doi trong qua trinh gui")
+
+            conn.sendall(data)
+            remaining -= len(data)
+
+    print("Da gui file:", filename)
+
+    # Nhan ket qua kiem tra tu Client
+    result = recv_json(conn)
+
+    if (
+        isinstance(result, dict)
+        and result.get("status") == "SUCCESS"
+    ):
+        print("Client tai file thanh cong:", filename)
+    else:
+        print("Client bao loi DOWNLOAD:", result)
 
 
 # Xu ly mot Client
+
+
 def handle_client(conn, addr):
     print("Client ket noi:", addr)
 
     try:
         with conn:
-            request = recv_json(conn)
+            while True:
+                try:
+                    # Cho phep Client dong ket noi sau khi xong
+                    request = recv_json(conn, allow_eof=True)
 
-            action = request.get("action")
+                except EOFError:
+                    print("Client da dong ket noi:", addr)
+                    break
 
-            if action == "UPLOAD":
-                print("Client yeu cau UPLOAD")
-                handle_upload(conn, request)
+                # Kiem tra request
+                if not isinstance(request, dict):
+                    send_json(conn, {
+                        "status": "ERROR",
+                        "message": "Request phai la JSON object"
+                    })
+                    continue
 
-            elif action == "DOWNLOAD":
-                print("Client yeu cau DOWNLOAD")
+                action = request.get("action")
 
-                send_json(conn, {
-                    "status": "READY"
-                })
+                if action == "UPLOAD":
+                    print("Client yeu cau UPLOAD")
+                    handle_upload(conn, request)
 
-            else:
-                send_json(conn, {
-                    "status": "ERROR"
-                })
+                elif action == "DOWNLOAD":
+                    print("Client yeu cau DOWNLOAD")
+                    handle_download(conn, request)
 
-    except (OSError, ValueError, ConnectionError, json.JSONDecodeError) as e:
+                else:
+                    send_json(conn, {
+                        "status": "ERROR",
+                        "message": "Action khong hop le"
+                    })
+
+    except (OSError, ValueError, UnicodeError) as e:
         print("Loi xu ly Client:", e)
 
-    print("Da xu ly xong Client:", addr)
+    finally:
+        print("Da xu ly xong Client:", addr)
 
 
 # Tao TCP Server

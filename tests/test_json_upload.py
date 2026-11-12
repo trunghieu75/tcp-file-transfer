@@ -65,7 +65,7 @@ with socket.create_connection((HOST, PORT)) as client:
     # Gui yeu cau upload
     send_json(client, {
         "action": "UPLOAD",
-        "filename": "upload_test.bin",
+        "filename": "upload_temp_test.bin",
         "size": file_size,
          "sha256": file_hash
     })
