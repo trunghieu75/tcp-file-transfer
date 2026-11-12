@@ -218,3 +218,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+# TCP File Transfer - generated data
+/results/*.bin
+/results/uploads/*.bin
+
+# Temporary upload files
+/results/uploads/.tmp/
