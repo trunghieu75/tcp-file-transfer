@@ -95,7 +95,6 @@ def handle_upload(conn, request):
             "message": "SHA-256 khong hop le"
         })
         return
-
     
     # Tao thu muc luu file
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
