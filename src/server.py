@@ -286,14 +286,14 @@ def handle_download(conn, request):
 
 
 def handle_client(conn, addr):
-    # ConnectionManager owns timeout, error logging and closing this socket.
+    # ConnectionManager owns the socket lifecycle.
     while True:
         try:
             request = recv_json(conn, allow_eof=True)
         except EOFError:
             return
         except (ValueError, UnicodeError):
-            # This is still the request phase; no file bytes are in flight.
+            # Safe to reply before file transfer starts.
             send_json(conn, {"status": "ERROR", "message": "JSON khong hop le"})
             return
 

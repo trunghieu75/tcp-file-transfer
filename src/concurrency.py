@@ -1,4 +1,4 @@
-"""TV4: bounded client workers, socket timeouts and orderly shutdown."""
+"""TV4 connection management."""
 
 import logging
 import math
@@ -10,23 +10,18 @@ LOGGER = logging.getLogger(__name__)
 
 
 def close_connection(connection):
-    """Interrupt blocking socket operations before releasing the descriptor."""
+    """Interrupt socket waits and close the connection."""
     try:
         connection.shutdown(socket.SHUT_RDWR)
     except OSError:
-        # The peer or its worker may already have closed this socket.
+        # Already disconnected.
         pass
     finally:
         connection.close()
 
 
 class ConnectionManager:
-    """Own accepted sockets and run the TV1 handler once per connection.
-
-    The handler may process successive requests on that connection. It must
-    release temporary files in finally blocks and allow socket errors to end
-    the connection. shutdown() interrupts network waits and joins all workers.
-    """
+    """Manage client workers and socket lifetimes."""
 
     def __init__(self, handler, *, client_timeout=30.0, max_clients=32):
         if not math.isfinite(client_timeout) or client_timeout <= 0:
@@ -50,7 +45,7 @@ class ConnectionManager:
             return len(self._workers)
 
     def start_client(self, connection, address):
-        """Take ownership of a socket, including closing rejected connections."""
+        """Start a worker or close the rejected connection."""
         with self._lock:
             if self._stopping.is_set() or len(self._workers) >= self.max_clients:
                 LOGGER.warning("client_rejected address=%s", address)
@@ -66,7 +61,7 @@ class ConnectionManager:
             try:
                 connection.settimeout(self.client_timeout)
                 self._workers[connection] = worker
-                # Starting under the lock prevents shutdown joining an unstarted thread.
+                # Start before shutdown can join this worker.
                 worker.start()
             except (OSError, RuntimeError):
                 self._workers.pop(connection, None)
@@ -91,7 +86,6 @@ class ConnectionManager:
             else:
                 LOGGER.warning("client_error address=%s error=%s", address, error)
         except Exception:
-            # One handler failure must not stop accepting other clients.
             LOGGER.exception("client_handler_failed address=%s", address)
         finally:
             close_connection(connection)
@@ -100,7 +94,7 @@ class ConnectionManager:
             LOGGER.info("client_closed address=%s", address)
 
     def serve_forever(self, listener):
-        """Accept from a bound listening socket until shutdown or Ctrl+C."""
+        """Accept clients until shutdown."""
         with self._lock:
             if self._stopping.is_set() or self._listener is not None:
                 raise RuntimeError("ConnectionManager can serve only once")
@@ -122,7 +116,7 @@ class ConnectionManager:
             self.shutdown()
 
     def shutdown(self):
-        """Stop admission, wake blocked socket operations and wait for cleanup."""
+        """Stop accepting, interrupt sockets and join workers."""
         with self._lock:
             self._stopping.set()
             listener = self._listener
@@ -136,7 +130,7 @@ class ConnectionManager:
                 connection.shutdown(socket.SHUT_RDWR)
             except OSError:
                 pass
-            # Its worker closes the descriptor after the handler's finally blocks.
+            # The worker closes its socket after cleanup.
         for connection, worker in workers:
             if worker is not threading.current_thread():
                 worker.join()

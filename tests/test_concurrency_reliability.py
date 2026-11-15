@@ -1,8 +1,4 @@
-"""TV4 regression tests using real TCP sockets and an isolated temporary store.
-
-Run from the repository root with
-python -m unittest discover -s tests -p test_concurrency_reliability.py -v
-"""
+"""TV4 concurrency and reliability tests over TCP."""
 
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
@@ -103,7 +99,7 @@ class ConcurrencyReliabilityTests(unittest.TestCase):
             filename = f"client_{index}.bin"
             with socket.create_connection(self.address, timeout=3) as connection:
                 self.begin_upload(connection, filename, data)
-                # All six connections must reach READY before any sends its body.
+                # Wait until all six uploads reach READY.
                 barrier.wait()
                 result = self.finish_upload(connection, data)
                 self.assertEqual(result["status"], "SUCCESS")
@@ -323,7 +319,7 @@ class ConcurrencyReliabilityTests(unittest.TestCase):
         try:
             self.assertEqual(connection.recv(1), b"")
         except ConnectionResetError:
-            # Shutdown may discard unread body bytes and reset the peer on Windows.
+            # Windows may reset a connection with unread data.
             pass
 
     def test_unexpected_handler_exception_does_not_stop_listener(self):
