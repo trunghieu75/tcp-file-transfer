@@ -28,6 +28,20 @@ Mỗi thành viên tự kiểm thử và viết nội dung liên quan đến ph�
 - Giao thức vận chuyển: TCP
 - Giao thức ứng dụng: JSON với framing 4 byte, truyền file theo chunk và kiểm tra SHA-256
 
+Phần quản lý kết nối của thành viên 4 đã tích hợp vào Server. Chạy từ thư mục gốc của repository.
+
+```powershell
+python -m src.server --host 127.0.0.1 --port 5000 --timeout 30 --max-clients 32 --log-file results/server.log
+```
+
+Chạy bộ kiểm thử tự động phần đồng thời và độ tin cậy.
+
+```powershell
+python -m unittest discover -s tests -p test_concurrency_reliability.py -v
+```
+
+Hướng dẫn cấu hình, ranh giới tích hợp và kết quả kiểm thử ở [tài liệu thành viên 4](report/TV4_CONCURRENCY.md).
+
 ## 4. Quy định làm việc trên GitHub
 
 Mỗi thành viên làm việc trên branch riêng:

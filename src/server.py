@@ -1,17 +1,25 @@
 import socket
-import threading
 import json
 import struct
 from pathlib import Path
 import hashlib
 import os
 import tempfile
+import argparse
+import logging
+import math
+
+if __package__:
+    from .concurrency import ConnectionManager
+else:
+    from concurrency import ConnectionManager
 
 HOST = "127.0.0.1"
 PORT = 5000
 MAX_FILE_SIZE = 100 * 1024 * 1024
 MAX_JSON_SIZE = 64 * 1024
 UPLOAD_DIR = Path("results/uploads")
+LOGGER = logging.getLogger(__name__)
 
 
 # Nhan chinh xac n byte
@@ -81,7 +89,7 @@ def handle_upload(conn, request):
         or file_size > MAX_FILE_SIZE
     ):
         send_json(conn, {"status": "ERROR"})
-        return
+        raise ValueError("Ten file hoac kich thuoc UPLOAD khong hop le")
 
     # Kiem tra SHA-256 hop le
     if (
@@ -94,7 +102,7 @@ def handle_upload(conn, request):
             "status": "ERROR",
             "message": "SHA-256 khong hop le"
         })
-        return
+        raise ValueError("SHA-256 khong hop le")
     
     # Tao thu muc luu file
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -164,7 +172,7 @@ def handle_upload(conn, request):
             })
             return
 
-        print("Nhan file thanh cong:", filename)
+        LOGGER.info("upload_completed filename=%s bytes=%s", filename, file_size)
 
         send_json(conn, {
             "status": "SUCCESS",
@@ -195,7 +203,7 @@ def handle_download(conn, request):
             "status": "ERROR",
             "message": "Ten file khong hop le"
         })
-        return
+        raise ValueError("Ten file DOWNLOAD khong hop le")
 
     # Xac dinh duong dan file
     file_path = UPLOAD_DIR / filename
@@ -240,8 +248,10 @@ def handle_download(conn, request):
         not isinstance(response, dict)
         or response.get("status") != "READY"
     ):
-        print("Client khong san sang nhan file")
-        return
+        if isinstance(response, dict) and response.get("status") == "ERROR":
+            LOGGER.info("download_cancelled filename=%s", filename)
+            return
+        raise ValueError("Client phai tra READY hoac ERROR truoc DOWNLOAD")
 
     # Gui noi dung file theo chunk
     remaining = file_size
@@ -256,7 +266,7 @@ def handle_download(conn, request):
             conn.sendall(data)
             remaining -= len(data)
 
-    print("Da gui file:", filename)
+    LOGGER.info("download_sent filename=%s bytes=%s", filename, file_size)
 
     # Nhan ket qua kiem tra tu Client
     result = recv_json(conn)
@@ -265,78 +275,95 @@ def handle_download(conn, request):
         isinstance(result, dict)
         and result.get("status") == "SUCCESS"
     ):
-        print("Client tai file thanh cong:", filename)
+        LOGGER.info("download_confirmed filename=%s", filename)
+    elif isinstance(result, dict) and result.get("status") == "ERROR":
+        LOGGER.warning("download_failed filename=%s result=%s", filename, result)
     else:
-        print("Client bao loi DOWNLOAD:", result)
+        raise ValueError("Ket qua DOWNLOAD phai la SUCCESS hoac ERROR")
 
 
 # Xu ly mot Client
 
 
 def handle_client(conn, addr):
-    print("Client ket noi:", addr)
+    # ConnectionManager owns timeout, error logging and closing this socket.
+    while True:
+        try:
+            request = recv_json(conn, allow_eof=True)
+        except EOFError:
+            return
+        except (ValueError, UnicodeError):
+            # This is still the request phase; no file bytes are in flight.
+            send_json(conn, {"status": "ERROR", "message": "JSON khong hop le"})
+            return
 
+        if not isinstance(request, dict):
+            send_json(conn, {
+                "status": "ERROR",
+                "message": "Request phai la JSON object"
+            })
+            return
+
+        action = request.get("action")
+        LOGGER.info("request address=%s action=%s", addr, action)
+        if action == "UPLOAD":
+            handle_upload(conn, request)
+        elif action == "DOWNLOAD":
+            handle_download(conn, request)
+        else:
+            send_json(conn, {
+                "status": "ERROR",
+                "message": "Action khong hop le"
+            })
+            return
+
+
+def main():
+    global UPLOAD_DIR
+
+    parser = argparse.ArgumentParser(description="TCP file server ET4230")
+    parser.add_argument("--host", default=HOST)
+    parser.add_argument("--port", type=int, default=PORT)
+    parser.add_argument("--timeout", type=float, default=30.0)
+    parser.add_argument("--max-clients", type=int, default=32)
+    parser.add_argument("--upload-dir", type=Path, default=UPLOAD_DIR)
+    parser.add_argument("--log-file", type=Path)
+    args = parser.parse_args()
+    if not 1 <= args.port <= 65535:
+        parser.error("port must be between 1 and 65535")
+    if not math.isfinite(args.timeout) or args.timeout <= 0:
+        parser.error("timeout must be positive and finite")
+    if args.max_clients <= 0:
+        parser.error("max-clients must be positive")
+
+    UPLOAD_DIR = args.upload_dir
     try:
-        with conn:
-            while True:
-                try:
-                    # Cho phep Client dong ket noi sau khi xong
-                    request = recv_json(conn, allow_eof=True)
-
-                except EOFError:
-                    print("Client da dong ket noi:", addr)
-                    break
-
-                # Kiem tra request
-                if not isinstance(request, dict):
-                    send_json(conn, {
-                        "status": "ERROR",
-                        "message": "Request phai la JSON object"
-                    })
-                    continue
-
-                action = request.get("action")
-
-                if action == "UPLOAD":
-                    print("Client yeu cau UPLOAD")
-                    handle_upload(conn, request)
-
-                elif action == "DOWNLOAD":
-                    print("Client yeu cau DOWNLOAD")
-                    handle_download(conn, request)
-
-                else:
-                    send_json(conn, {
-                        "status": "ERROR",
-                        "message": "Action khong hop le"
-                    })
-
-    except (OSError, ValueError, UnicodeError) as e:
-        print("Loi xu ly Client:", e)
-
-    finally:
-        print("Da xu ly xong Client:", addr)
-
-
-# Tao TCP Server
-with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
-
-    server.bind((HOST, PORT))
-    server.listen()
-
-    print("Server dang chay tai", HOST, PORT)
-
-    try:
-        while True:
-            conn, addr = server.accept()
-
-            t = threading.Thread(
-                target=handle_client,
-                args=(conn, addr),
-                daemon=True
-            )
-
-            t.start()
-
+        handlers = [logging.StreamHandler()]
+        if args.log_file is not None:
+            args.log_file.parent.mkdir(parents=True, exist_ok=True)
+            handlers.append(logging.FileHandler(args.log_file, encoding="utf-8"))
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)s [%(threadName)s] %(message)s",
+            handlers=handlers,
+        )
+        manager = ConnectionManager(
+            handle_client,
+            client_timeout=args.timeout,
+            max_clients=args.max_clients,
+        )
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            listener.bind((args.host, args.port))
+            listener.listen()
+            LOGGER.info("server_listening host=%s port=%s", args.host, args.port)
+            manager.serve_forever(listener)
     except KeyboardInterrupt:
-        print("Dung Server")
+        LOGGER.info("server_stopped")
+    except OSError as error:
+        LOGGER.error("server_error error=%s", error)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
