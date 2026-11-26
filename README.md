@@ -42,6 +42,14 @@ python -m unittest discover -s tests -p test_concurrency_reliability.py -v
 
 Hướng dẫn cấu hình, ranh giới tích hợp và kết quả kiểm thử ở [tài liệu thành viên 4](report/TV4_CONCURRENCY.md).
 
+Các hàm giao thức dùng chung (JSON framing, `recv_exact`, truyền file theo chunk, SHA-256) nằm trong `src/protocol.py`. Chạy kiểm thử của thành viên 3:
+
+```powershell
+python -m unittest discover -s tests -p test_protocol.py -v
+```
+
+Giao diện hàm, thiết kế framing/checksum và ghi chú tích hợp ở [tài liệu thành viên 3](report/TV3_PROTOCOL.md).
+
 ## 4. Quy định làm việc trên GitHub
 
 Mỗi thành viên làm việc trên branch riêng:
