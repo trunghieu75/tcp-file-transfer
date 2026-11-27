@@ -1,0 +1,14 @@
+{
+  "date": "2026-11-27T19:26:52",
+  "os": "Windows-11-10.0.26200-SP0",
+  "python": "3.13.12",
+  "cpu": "Intel64 Family 6 Model 140 Stepping 1, GenuineIntel",
+  "cpu_count": 8,
+  "network": "loopback (server cuc bo)",
+  "server_address": "127.0.0.1:59771",
+  "server_chunk_size": 4096,
+  "repeat": 10,
+  "warmup": 1,
+  "git_commit": "3ec75b5",
+  "note": "Client benchmark chay bang thread trong mot tien trinh; server la tien trinh rieng (python -m src.server)."
+}
