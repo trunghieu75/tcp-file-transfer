@@ -50,6 +50,18 @@ python -m unittest discover -s tests -p test_protocol.py -v
 
 Giao diện hàm, thiết kế framing/checksum và ghi chú tích hợp ở [tài liệu thành viên 3](report/TV3_PROTOCOL.md).
 
+Benchmark của thành viên 5 tự khởi động Server trên loopback, chạy TN1–TN3 và ghi CSV vào `results/`. Sau đó vẽ biểu đồ vào `plots/`.
+
+```powershell
+python -m benchmarks.bench --repeat 10
+```
+
+```powershell
+python -m benchmarks.plot
+```
+
+Phương pháp đo, kết quả, nhận xét và giới hạn ở [tài liệu thành viên 5](report/TV5_BENCHMARK.md).
+
 ## 4. Quy định làm việc trên GitHub
 
 Mỗi thành viên làm việc trên branch riêng:

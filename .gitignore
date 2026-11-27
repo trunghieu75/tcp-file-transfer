@@ -224,3 +224,5 @@ __marimo__/
 
 # Temporary upload files
 /results/uploads/.tmp/
+# TV5 benchmark - du lieu ngau nhien sinh tu dong
+/benchmarks/data/
